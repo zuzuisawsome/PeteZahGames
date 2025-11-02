@@ -1,4 +1,3 @@
-
 let destination = "";
 
 try {

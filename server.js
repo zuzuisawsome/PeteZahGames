@@ -1,4 +1,5 @@
-import { createBareServer } from "@tomphttp/bare-server-node";
+import bareServerPkg from "@tomphttp/bare-server-node";
+const { createBareServer } = bareServerPkg;
 import express from "express";
 import { createServer } from "node:http";
 import { epoxyPath } from "@mercuryworkshop/epoxy-transport";
@@ -27,16 +28,16 @@ import cluster from "node:cluster";
 
 dotenv.config();
 const envFile = `.env.${process.env.NODE_ENV || 'production'}`;
-if (fs.existsSync(envFile)) {dotenv.config({ path: envFile });}
+if (fs.existsSync(envFile)) { dotenv.config({ path: envFile }); }
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicPath = "public";
 const { SUPABASE_URL, SUPABASE_KEY, SUPABASE_SERVICE_ROLE_KEY } = process.env;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const bare = createBareServer("/bare/");
+const barePremium = createBareServer("/api/bare-premium/");
 const app = express();
 app.use(cookieParser());
-
 const getRandomIPv6 = () => {
   const i = Math.floor(Math.random() * 5000) + 1;
   return `2607:5300:205:200:${i.toString(16).padStart(4, '0')}::1`;
@@ -85,8 +86,8 @@ const verifyMiddleware = (req, res, next) => {
 app.use(verifyMiddleware);
 
 const apiLimiter = rateLimit({
-  windowMs: 15 * 1000, 
-  max: 100,             
+  windowMs: 15 * 1000,
+  max: 100,
   standardHeaders: true,
   legacyHeaders: false,
   message: "Too many requests from this IP, slow down"
@@ -425,6 +426,11 @@ const server = createServer((req, res) => {
       req.ipv6 = getRandomIPv6();
       bare.routeRequest(req, res);
     });
+  } else if (barePremium.shouldRoute(req)) {
+    handleHttpVerification(req, res, () => {
+      req.ipv6 = getRandomIPv6();
+      barePremium.routeRequest(req, res);
+    });
   } else {
     app.handle(req, res);
   }
@@ -436,15 +442,24 @@ server.on("upgrade", (req, socket, head) => {
       req.ipv6 = getRandomIPv6();
       bare.routeUpgrade(req, socket, head);
     });
-  } else if (req.url && req.url.startsWith("/wisp/")) {
+  } else if (barePremium.shouldRoute(req)) {
     handleUpgradeVerification(req, socket, () => {
       req.ipv6 = getRandomIPv6();
+      barePremium.routeUpgrade(req, socket, head);
+    });
+  } else if (req.url && (req.url.startsWith("/wisp/") || req.url.startsWith("/api/wisp-premium/"))) {
+    handleUpgradeVerification(req, socket, () => {
+      req.ipv6 = getRandomIPv6();
+      if (req.url.startsWith("/api/wisp-premium/")) {
+        req.url = req.url.replace("/api/wisp-premium/", "/wisp/");
+      }
       wisp.routeRequest(req, socket, head);
     });
   } else {
     socket.destroy();
   }
 });
+// In my serverside config I rewrite /api/wisp-premium/ to go to a bare/wisp servers from non-flagged ip datacenters to allow for cloudflare/google protected sites to work.
 
 const port = parseInt(process.env.PORT || "3000");
 
